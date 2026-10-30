@@ -6,6 +6,7 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+from pathlib import Path
 
 
 # ==========================================
@@ -37,16 +38,31 @@ st.divider()
 
 
 # ==========================================
-# 4. อ่านข้อมูล CSV
+# 4. อ่านข้อมูล CSV แบบ GZIP
 # ==========================================
 
 @st.cache_data
 def load_data():
 
-    file_path = "data/shipments_clean_final.csv"
+    # ค้นหาโฟลเดอร์เดียวกับ app.py
+    base_dir = Path(__file__).resolve().parent
 
-    df = pd.read_csv(file_path)
+    # ไฟล์ข้อมูลอยู่ระดับเดียวกับ app.py
+    file_path = base_dir / "shipments_clean_final.csv.gz"
 
+    # ตรวจสอบว่ามีไฟล์หรือไม่
+    if not file_path.is_file():
+        raise FileNotFoundError(
+            f"ไม่พบไฟล์ข้อมูล: {file_path}"
+        )
+
+    # อ่านไฟล์ GZIP
+    df = pd.read_csv(
+        file_path,
+        compression="gzip"
+    )
+
+    # แปลงคอลัมน์วันที่
     date_columns = [
         "shipped_at",
         "promised_at",
@@ -55,27 +71,47 @@ def load_data():
     ]
 
     for col in date_columns:
-        df[col] = pd.to_datetime(df[col], errors="coerce")
+        if col in df.columns:
+            df[col] = pd.to_datetime(
+                df[col],
+                errors="coerce"
+            )
 
     return df
 
 
 # ==========================================
-# 5. โหลดข้อมูลและตรวจสอบคอลัมน์
+# 5. โหลดข้อมูลและตรวจสอบความถูกต้อง
 # ==========================================
 
 try:
 
     df = load_data()
 
-except FileNotFoundError:
+except FileNotFoundError as e:
 
-    st.error(
-        "ไม่พบไฟล์ shipments_clean_final.csv "
-        "กรุณาตรวจสอบว่าไฟล์อยู่ในโฟลเดอร์ data"
+    st.error("ไม่พบไฟล์ข้อมูลที่เว็บไซต์ต้องใช้")
+
+    st.code(str(e))
+
+    st.info(
+        "กรุณาตรวจสอบว่าไฟล์ "
+        "shipments_clean_final.csv.gz "
+        "อยู่ระดับเดียวกับ app.py บน GitHub"
     )
+
     st.stop()
 
+except Exception as e:
+
+    st.error("เกิดข้อผิดพลาดระหว่างอ่านไฟล์ข้อมูล")
+
+    st.code(f"{type(e).__name__}: {e}")
+
+    st.stop()
+
+
+# ตรวจสอบคอลัมน์ที่จำเป็น
 required_columns = [
     "shipment_id",
     "shipped_at",
@@ -95,7 +131,18 @@ missing_columns = [
 
 if missing_columns:
 
-    st.error(f"ไม่พบคอลัมน์ที่จำเป็น: {missing_columns}")
+    st.error(
+        f"ไม่พบคอลัมน์ที่จำเป็น: {missing_columns}"
+    )
+
+    st.stop()
+
+
+# ตรวจสอบข้อมูลวันที่
+if df["shipped_at"].isna().all():
+
+    st.error("ไม่พบข้อมูลวันที่จัดส่งที่ใช้งานได้")
+
     st.stop()
 
 
@@ -107,10 +154,6 @@ st.sidebar.header("🔎 ตัวกรองข้อมูล")
 
 # ตัวกรองวันที่
 date_data = df["shipped_at"].dropna()
-
-if date_data.empty:
-    st.error("ไม่พบข้อมูลวันที่จัดส่ง")
-    st.stop()
 
 min_date = date_data.min().date()
 max_date = date_data.max().date()
@@ -186,23 +229,28 @@ selected_services = st.sidebar.multiselect(
 
 filtered_df = df.copy()
 
+# กรองวันที่จัดส่ง
 filtered_df = filtered_df[
     (filtered_df["shipped_at"].dt.date >= start_date) &
     (filtered_df["shipped_at"].dt.date <= end_date)
 ]
 
+# กรองสถานะ
 filtered_df = filtered_df[
     filtered_df["status"].isin(selected_status)
 ]
 
+# กรองบริษัทขนส่ง
 filtered_df = filtered_df[
     filtered_df["carrier_id"].isin(selected_carriers)
 ]
 
+# กรองพื้นที่
 filtered_df = filtered_df[
     filtered_df["zone_id"].isin(selected_zones)
 ]
 
+# กรองประเภทบริการ
 filtered_df = filtered_df[
     filtered_df["service_id"].isin(selected_services)
 ]
@@ -214,17 +262,24 @@ filtered_df = filtered_df[
 
 st.subheader("📊 ภาพรวมข้อมูล")
 
-st.write(
-    f"จำนวนข้อมูลทั้งหมด: {len(df):,} รายการ"
+col_info1, col_info2 = st.columns(2)
+
+col_info1.metric(
+    "ข้อมูลทั้งหมด",
+    f"{len(df):,} รายการ"
 )
 
-st.write(
-    f"จำนวนข้อมูลหลังกรอง: {len(filtered_df):,} รายการ"
+col_info2.metric(
+    "ข้อมูลหลังกรอง",
+    f"{len(filtered_df):,} รายการ"
 )
 
 if filtered_df.empty:
 
-    st.warning("ไม่พบข้อมูลตามเงื่อนไขที่เลือก")
+    st.warning(
+        "ไม่พบข้อมูลตามเงื่อนไขที่เลือก "
+        "กรุณาปรับตัวกรองใหม่"
+    )
 
     st.stop()
 
@@ -250,22 +305,19 @@ lost_count = (
 
 success_rate = (
     success_count / total_shipments * 100
-    if total_shipments > 0 else 0
 )
 
 returned_rate = (
     returned_count / total_shipments * 100
-    if total_shipments > 0 else 0
 )
 
 lost_rate = (
     lost_count / total_shipments * 100
-    if total_shipments > 0 else 0
 )
 
 
 # ==========================================
-# 10. คำนวณระยะเวลาจัดส่งและการส่งล่าช้า
+# 10. คำนวณระยะเวลาจัดส่ง
 # ==========================================
 
 successful_df = filtered_df[
@@ -279,18 +331,29 @@ successful_df["delivery_hours"] = (
     successful_df["shipped_at"]
 ).dt.total_seconds() / 3600
 
-avg_delivery_hours = (
-    successful_df["delivery_hours"].mean()
-    if not successful_df.empty else 0
-)
 
+if not successful_df.empty:
+
+    avg_delivery_hours = successful_df[
+        "delivery_hours"
+    ].mean()
+
+else:
+
+    avg_delivery_hours = 0
+
+
+# ==========================================
+# 11. คำนวณอัตราจัดส่งล่าช้า
+# ==========================================
 
 late_df = successful_df[
     successful_df["promised_at"].notna()
 ]
 
 late_count = (
-    late_df["delivered_at"] > late_df["promised_at"]
+    late_df["delivered_at"] >
+    late_df["promised_at"]
 ).sum()
 
 late_rate = (
@@ -300,7 +363,7 @@ late_rate = (
 
 
 # ==========================================
-# 11. คำนวณค่าขนส่ง
+# 12. คำนวณค่าขนส่ง
 # ==========================================
 
 total_shipping_charge = (
@@ -309,7 +372,7 @@ total_shipping_charge = (
 
 
 # ==========================================
-# 12. แสดง KPI Cards
+# 13. แสดง KPI Cards
 # ==========================================
 
 st.subheader("🎯 ตัวชี้วัดประสิทธิภาพการขนส่ง")
@@ -364,7 +427,7 @@ st.divider()
 
 
 # ==========================================
-# 13. กราฟจำนวนพัสดุรายวัน
+# 14. กราฟจำนวนพัสดุรายวัน
 # ==========================================
 
 st.subheader("📅 จำนวนพัสดุตามวันที่จัดส่ง")
@@ -373,7 +436,8 @@ daily_data = (
     filtered_df
     .dropna(subset=["shipped_at"])
     .assign(
-        shipment_date=lambda x: x["shipped_at"].dt.date
+        shipment_date=lambda x:
+        x["shipped_at"].dt.date
     )
     .groupby("shipment_date")
     .size()
@@ -402,7 +466,7 @@ if not daily_data.empty:
 
 
 # ==========================================
-# 14. กราฟสถานะพัสดุตามบริษัทขนส่ง
+# 15. กราฟสถานะพัสดุตามบริษัทขนส่ง
 # ==========================================
 
 st.subheader("🚚 สถานะพัสดุแยกตามบริษัทขนส่ง")
@@ -436,7 +500,7 @@ st.plotly_chart(
 
 
 # ==========================================
-# 15. กราฟค่าขนส่งแยกตามพื้นที่
+# 16. กราฟค่าขนส่งแยกตามพื้นที่
 # ==========================================
 
 st.subheader("💰 ค่าขนส่งแยกตามพื้นที่")
@@ -473,14 +537,14 @@ st.plotly_chart(
 
 
 # ==========================================
-# 16. ตารางข้อมูลพัสดุ
+# 17. ตารางรายละเอียดข้อมูลพัสดุ
 # ==========================================
 
 st.subheader("📋 รายละเอียดข้อมูลพัสดุ")
 
 st.write(
-    f"แสดงข้อมูล 1,000 รายการแรก จากทั้งหมด "
-    f"{len(filtered_df):,} รายการที่ผ่านการกรอง"
+    f"แสดงข้อมูล 1,000 รายการแรก "
+    f"จากทั้งหมด {len(filtered_df):,} รายการ"
 )
 
 st.dataframe(
@@ -491,20 +555,24 @@ st.dataframe(
 
 
 # ==========================================
-# 17. ข้อควรระวังในการแปลผล
+# 18. ข้อควรระวังในการวิเคราะห์
 # ==========================================
 
 st.divider()
 
-st.subheader("⚠️ ข้อควรระวังในการวิเคราะห์")
+st.subheader("⚠️ ข้อควรระวังในการแปลผล")
 
 st.markdown("""
 - อัตราจัดส่งล่าช้าคำนวณเฉพาะพัสดุที่จัดส่งสำเร็จ
   และมีข้อมูลวันที่ส่งจริงกับวันที่กำหนดส่งครบถ้วน
+
 - ระยะเวลาจัดส่งเฉลี่ยคำนวณเฉพาะพัสดุที่จัดส่งสำเร็จ
   และมีวันที่จัดส่งกับวันที่ส่งถึงครบถ้วน
-- ค่าขนส่งรวมหมายถึงผลรวมของ `shipping_charge_baht`
+
+- ค่าขนส่งรวมหมายถึงผลรวมของ
+  `shipping_charge_baht`
   ไม่ใช่ต้นทุนการดำเนินงานทั้งหมด
+
 - ข้อมูลการหยุดชะงักของการขนส่งมีค่าว่างจำนวนมาก
   จึงไม่ควรตีความว่าค่าว่างหมายถึงไม่มีเหตุขัดข้อง
 """)
